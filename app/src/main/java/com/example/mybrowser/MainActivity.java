@@ -1,12 +1,17 @@
 package com.example.mybrowser;
 
 import android.Manifest;
+import android.app.Dialog;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
+import android.os.Handler;
+import android.os.Looper;
 import android.webkit.WebView;
+import android.widget.Button;
 import android.widget.ImageButton;
+import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
@@ -33,9 +38,13 @@ import java.util.concurrent.Executors;
 public class MainActivity extends AppCompatActivity {
 
     ImageButton searchButton;
+    Button htmlButton;
     TextInputEditText searchBar;
     WebView webView;
-    ExecutorService executorService;
+
+    String pageContent = "";
+
+    Dialog popup;
     private static final int REQUEST_WRITE_STORAGE = 112;
 
     @Override
@@ -52,11 +61,8 @@ public class MainActivity extends AppCompatActivity {
         searchButton = findViewById(R.id.searchButton);
         searchBar = findViewById(R.id.searchBar);
         webView = findViewById(R.id.webView);
+        htmlButton = findViewById(R.id.htmlButton);
 
-        // Initialize the ExecutorService
-        executorService = Executors.newSingleThreadExecutor();
-
-        // Check for storage permission
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
             if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                     != PackageManager.PERMISSION_GRANTED) {
@@ -64,6 +70,12 @@ public class MainActivity extends AppCompatActivity {
                         new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_WRITE_STORAGE);
             }
         }
+
+        popup = new Dialog(this);
+
+        popup.setContentView(R.layout.popup);
+
+        TextView textView = popup.findViewById(R.id.textView);
 
         searchButton.setOnClickListener(view -> {
             String url = searchBar.getText().toString();
@@ -73,46 +85,51 @@ public class MainActivity extends AppCompatActivity {
                 Toast.makeText(this, "Please enter a URL", Toast.LENGTH_SHORT).show();
             }
         });
-    }
 
-    private void fetchAndDisplayHtml(String urlString) {
-        executorService.execute(() -> {
-            try {
-                URL url = new URL(urlString);
-                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
-                connection.setRequestMethod("HEAD");
-
-                // Check the content type
-                String contentType = connection.getContentType();
-                if (contentType != null && contentType.startsWith("video")) {
-                    // Prompt user to download the video file
-                    runOnUiThread(() -> offerDownload(urlString));
-                } else {
-                    // If not a video file, fetch and display the HTML content
-                    connection = (HttpURLConnection) url.openConnection();
-
-                    BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                    StringBuilder response = new StringBuilder();
-                    String inputLine;
-                    while ((inputLine = in.readLine()) != null) {
-                        response.append(inputLine);
-                    }
-                    in.close();
-
-                    String cleanedHtml = cleanHtmlContent(response.toString());
-
-                    runOnUiThread(() -> webView.loadData(cleanedHtml, "text/html", "UTF-8"));
-                }
-            } catch (IOException e) {
-                runOnUiThread(() -> Toast.makeText(MainActivity.this, "Error fetching page", Toast.LENGTH_SHORT).show());
-                e.printStackTrace();
+        htmlButton.setOnClickListener(view-> {
+            if (!pageContent.isEmpty()) {
+                textView.setText(pageContent);
+                popup.show();
             }
         });
     }
+    private void fetchAndDisplayHtml(String urlString) {
+        Handler handler = new Handler(Looper.getMainLooper());
 
-    private void offerDownload(String urlString) {
-        Toast.makeText(this, "Video file detected. Starting download...", Toast.LENGTH_SHORT).show();
-        executorService.execute(() -> downloadFile(urlString));
+        new Thread(() -> {
+            try {
+                URL url = new URL(urlString);
+                HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+                String contentType = connection.getContentType();
+                if (contentType != null && contentType.startsWith("video"))
+                {
+                    downloadFile(urlString);
+                }
+                else {
+                    try {
+                        connection.connect();
+
+                        InputStream inputStream = connection.getInputStream();
+                        BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(inputStream));
+
+                        StringBuilder stringBuilder = new StringBuilder();
+                        String line;
+                        while ((line = bufferedReader.readLine()) != null) {
+                            stringBuilder.append(line).append("\n");
+                        }
+
+                        pageContent = stringBuilder.toString();
+
+                        handler.post(() -> webView.loadDataWithBaseURL(urlString, pageContent, "text/html", "UTF-8", null));
+                    }
+                    finally {
+                        connection.disconnect();
+                    }
+                }
+            } catch (Exception e) {
+                e.printStackTrace();
+            }
+        }).start();
     }
 
     private void downloadFile(String urlString) {
@@ -150,20 +167,8 @@ public class MainActivity extends AppCompatActivity {
         }
     }
 
-    private String cleanHtmlContent(String html) {
-        // Basic cleaning using regex to remove problematic attributes and empty attributes
-        html = html.replaceAll("(<[^>]+)\\s+\\w*=\"\"", "$1"); // Remove empty attributes
-        html = html.replaceAll("(<[^>]+)\\s+\\w*=''", "$1"); // Remove empty attributes
-        // Optionally, you can add more cleaning rules here
-
-        return html;
-    }
-
     @Override
     protected void onDestroy() {
         super.onDestroy();
-        if (executorService != null) {
-            executorService.shutdown();
-        }
     }
 }
